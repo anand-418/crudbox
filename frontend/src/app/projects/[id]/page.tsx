@@ -56,10 +56,10 @@ export default function ProjectDetail() {
     try {
       const endpointsResponse = await projectAPI.listProjectEndpoints(projectUuid);
       const data = endpointsResponse.data;
-      const fetchedEndpoints = Array.isArray(data?.endpoints)
-        ? data.endpoints
+      const fetchedEndpoints: Endpoint[] = Array.isArray(data?.endpoints)
+        ? (data.endpoints as Endpoint[])
         : Array.isArray(data)
-          ? data
+          ? (data as Endpoint[])
           : [];
       setEndpoints(fetchedEndpoints);
       setEditingEndpoint(prev => {
