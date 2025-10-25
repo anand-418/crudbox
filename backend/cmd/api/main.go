@@ -6,9 +6,10 @@ import (
 	"log"
 	"os"
 
-	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	ginadapter "github.com/awslabs/aws-lambda-go-api-proxy/gin"
+
+	"github.com/aws/aws-lambda-go/events"
 
 	"github.com/crudboxin/crudbox/internal/database"
 	"github.com/crudboxin/crudbox/internal/handler"
@@ -74,8 +75,8 @@ func main() {
 	router := server.SetupRoutes()
 
 	if isLambdaRuntime() {
-		adapter := ginadapter.New(router)
-		lambda.Start(func(ctx context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+		adapter := ginadapter.NewV2(router)
+		lambda.Start(func(ctx context.Context, req events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
 			return adapter.ProxyWithContext(ctx, req)
 		})
 		return
