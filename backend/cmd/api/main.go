@@ -1,8 +1,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
+	"os"
+
+	"github.com/aws/aws-lambda-go/events"
+	"github.com/aws/aws-lambda-go/lambda"
+	ginadapter "github.com/awslabs/aws-lambda-go-api-proxy/gin"
 
 	"github.com/crudboxin/crudbox/internal/database"
 	"github.com/crudboxin/crudbox/internal/handler"
@@ -66,8 +72,21 @@ func main() {
 
 	// Setup routes and start server
 	router := server.SetupRoutes()
+
+	if isLambdaRuntime() {
+		adapter := ginadapter.New(router)
+		lambda.Start(func(ctx context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+			return adapter.ProxyWithContext(ctx, req)
+		})
+		return
+	}
+
 	log.Println("Server starting on :8080")
 	if err := router.Run(":8080"); err != nil {
 		log.Fatal("Failed to start server:", err)
 	}
+}
+
+func isLambdaRuntime() bool {
+	return os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != "" || os.Getenv("LAMBDA_TASK_ROOT") != ""
 }

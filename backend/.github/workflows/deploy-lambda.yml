@@ -1,0 +1,67 @@
+name: Deploy backend to AWS Lambda
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      STAGE: ${{ secrets.LAMBDA_STAGE }}
+      DB_HOST: ${{ secrets.DB_HOST }}
+      DB_PORT: ${{ secrets.DB_PORT }}
+      DB_USER: ${{ secrets.DB_USER }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      DB_NAME: ${{ secrets.DB_NAME }}
+      DB_SSLMODE: ${{ secrets.DB_SSLMODE }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Install dependencies
+        run: go mod download
+        working-directory: backend
+
+      - name: Run tests
+        run: go test ./...
+        working-directory: backend
+
+      - name: Build Lambda binary
+        run: |
+          mkdir -p dist
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o dist/bootstrap ./cmd/api
+        working-directory: backend
+
+      - name: Package artifact
+        run: |
+          cd dist
+          rm -f function.zip
+          zip -q function.zip bootstrap
+        working-directory: backend
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Serverless CLI
+        run: npm install --global serverless@3
+
+      - name: Deploy infrastructure and function
+        run: serverless deploy --stage ${STAGE:-prod}
+        working-directory: backend
