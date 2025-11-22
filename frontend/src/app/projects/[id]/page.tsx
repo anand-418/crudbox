@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import Layout from '@/components/Layout';
 import { projectAPI, endpointAPI } from '@/lib/api';
-import { Plus, Edit, Trash2, ArrowLeft, FolderOpen, Save } from 'lucide-react';
+import { Plus, Trash2, ArrowLeft, FolderOpen, Save, UploadCloud, AlertTriangle, CheckCircle2 } from 'lucide-react';
 
 interface Endpoint {
   uuid: string;
@@ -15,6 +15,35 @@ interface Endpoint {
   response_headers: string;
   created_at: string;
   updated_at: string;
+}
+
+interface OpenAPIOperationPreview {
+  method: string;
+  path: string;
+  response_status: number;
+  response_body: string;
+  response_headers: string;
+  status: 'new' | 'existing' | 'duplicate';
+  reason?: string;
+}
+
+interface OpenAPIImportPreview {
+  total_operations: number;
+  new_count: number;
+  existing_count: number;
+  skipped_count: number;
+  operations: OpenAPIOperationPreview[];
+}
+
+interface BulkCreateSkippedEndpoint {
+  method: string;
+  path: string;
+  reason: string;
+}
+
+interface BulkCreateResult {
+  created?: Endpoint[];
+  skipped?: BulkCreateSkippedEndpoint[];
 }
 
 export default function ProjectDetail() {
@@ -31,16 +60,14 @@ export default function ProjectDetail() {
   const [createError, setCreateError] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [isMounted, setIsMounted] = useState(false);
-  const [editingEndpoint, setEditingEndpoint] = useState<Endpoint | null>(null);
-  const [editFormData, setEditFormData] = useState({
-    method: 'GET',
-    path: '',
-    response_status: 200,
-    response_body: '{\n  "message": "Hello World"\n}',
-    response_headers: '{\n  "Content-Type": "application/json"\n}'
-  });
-  const [editError, setEditError] = useState('');
-  const [isUpdating, setIsUpdating] = useState(false);
+
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploadError, setUploadError] = useState('');
+  const [preview, setPreview] = useState<OpenAPIImportPreview | null>(null);
+  const [bulkResult, setBulkResult] = useState<BulkCreateResult | null>(null);
+  const [isUploadingOpenAPI, setIsUploadingOpenAPI] = useState(false);
+  const [isBulkCreating, setIsBulkCreating] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const router = useRouter();
   const params = useParams();
 
@@ -62,11 +89,7 @@ export default function ProjectDetail() {
           ? (data as Endpoint[])
           : [];
       setEndpoints(fetchedEndpoints);
-      setEditingEndpoint(prev => {
-        if (!prev) return prev;
-        const refreshed = fetchedEndpoints.find(endpoint => endpoint.uuid === prev.uuid);
-        return refreshed || null;
-      });
+      setEndpoints(fetchedEndpoints);
     } catch (error) {
       console.error('Failed to fetch endpoints:', error);
       setEndpoints([]);
@@ -108,7 +131,7 @@ export default function ProjectDetail() {
         await fetchEndpoints();
       }
       setShowCreateForm(false);
-      setEditingEndpoint(null);
+      setShowCreateForm(false);
       setCreateFormData({
         method: 'GET',
         path: '',
@@ -130,52 +153,98 @@ export default function ProjectDetail() {
     }));
   };
 
-  const startEditing = (endpoint: Endpoint) => {
-    setShowCreateForm(false);
-    setEditError('');
-    setEditingEndpoint(endpoint);
-    setEditFormData({
-      method: endpoint.method,
-      path: endpoint.path,
-      response_status: endpoint.response_status,
-      response_body: endpoint.response_body,
-      response_headers: endpoint.response_headers,
-    });
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    setSelectedFile(file);
+    setUploadError('');
+    setPreview(null);
+    setBulkResult(null);
   };
 
-  const handleEditInputChange = (field: string, value: string | number) => {
-    setEditFormData(prev => ({
-      ...prev,
-      [field]: value
-    }));
-  };
+  const handleUploadSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
 
-  const handleEditSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingEndpoint) return;
     if (!projectUuid) {
-      setEditError('Project not specified');
+      setUploadError('Project not specified');
       return;
     }
 
-    setEditError('');
-    setIsUpdating(true);
+    if (!selectedFile) {
+      setUploadError('Please select an OpenAPI YAML file');
+      return;
+    }
+
+    setIsUploadingOpenAPI(true);
+    setUploadError('');
+    setBulkResult(null);
 
     try {
-      const response = await endpointAPI.update(projectUuid, editingEndpoint.uuid, editFormData);
-      const updatedEndpoint = response.data?.endpoint ?? response.data;
-      if (updatedEndpoint) {
-        setEndpoints(prev => prev.map(endpoint => (endpoint.uuid === updatedEndpoint.uuid ? updatedEndpoint : endpoint)));
-      } else {
-        await fetchEndpoints();
+      const response = await projectAPI.uploadOpenAPI(projectUuid, selectedFile);
+      const previewData = (response.data?.preview ?? response.data) as OpenAPIImportPreview | undefined;
+      setPreview(previewData ?? null);
+      setSelectedFile(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
       }
-      setEditingEndpoint(null);
-    } catch (err: unknown) {
-      setEditError((err as Error & { response?: { data?: { error?: string } } })?.response?.data?.error || 'Failed to update endpoint');
+    } catch (error) {
+      const message =
+        (error as { response?: { data?: { error?: string } } }).response?.data?.error ||
+        (error as Error).message ||
+        'Failed to upload OpenAPI file';
+      setUploadError(message);
+      setPreview(null);
     } finally {
-      setIsUpdating(false);
+      setIsUploadingOpenAPI(false);
     }
   };
+
+  const handleConfirmImport = async () => {
+    if (!projectUuid) {
+      setUploadError('Project not specified');
+      return;
+    }
+
+    if (!preview) {
+      setUploadError('No preview available to import');
+      return;
+    }
+
+    const newOperations = preview.operations?.filter((operation) => operation.status === 'new') ?? [];
+
+    if (newOperations.length === 0) {
+      setUploadError('No new endpoints to import');
+      return;
+    }
+
+    setIsBulkCreating(true);
+    setUploadError('');
+
+    try {
+      const payload = newOperations.map((operation) => ({
+        method: operation.method,
+        path: operation.path,
+        response_body: operation.response_body,
+        response_status: operation.response_status,
+        response_headers: operation.response_headers,
+      }));
+
+      const response = await endpointAPI.bulkCreate(projectUuid, payload);
+      const resultData = (response.data?.result ?? response.data) as BulkCreateResult | undefined;
+      setBulkResult(resultData ?? null);
+      setPreview(null);
+      await fetchEndpoints();
+    } catch (error) {
+      const message =
+        (error as { response?: { data?: { error?: string } } }).response?.data?.error ||
+        (error as Error).message ||
+        'Failed to create endpoints';
+      setUploadError(message);
+    } finally {
+      setIsBulkCreating(false);
+    }
+  };
+
+
 
   const validateJSON = (jsonString: string) => {
     try {
@@ -191,9 +260,7 @@ export default function ProjectDetail() {
       try {
         await endpointAPI.delete(uuid);
         setEndpoints(prev => prev.filter(e => e.uuid !== uuid));
-        if (editingEndpoint?.uuid === uuid) {
-          setEditingEndpoint(null);
-        }
+
       } catch (error) {
         console.error('Failed to delete endpoint:', error);
       }
@@ -210,6 +277,34 @@ export default function ProjectDetail() {
     };
     return colors[method] || 'bg-neutral-200 text-black';
   };
+
+  const getPreviewStatusStyles = (status: OpenAPIOperationPreview['status']) => {
+    switch (status) {
+      case 'new':
+        return 'bg-green-100 text-green-800';
+      case 'existing':
+        return 'bg-blue-100 text-blue-800';
+      case 'duplicate':
+        return 'bg-amber-100 text-amber-800';
+      default:
+        return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  const getPreviewStatusLabel = (status: OpenAPIOperationPreview['status']) => {
+    switch (status) {
+      case 'new':
+        return 'Ready';
+      case 'existing':
+        return 'Already exists';
+      case 'duplicate':
+        return 'Duplicate in file';
+      default:
+        return status;
+    }
+  };
+
+  const newOperationsCount = preview?.operations?.filter((operation) => operation.status === 'new').length ?? 0;
 
   if (isLoading) {
     return (
@@ -254,7 +349,6 @@ export default function ProjectDetail() {
             <h1 className="text-3xl font-bold text-gray-900">Project Endpoints</h1>
             <button
               onClick={() => {
-                setEditingEndpoint(null);
                 setShowCreateForm(!showCreateForm);
               }}
               className="flex items-center px-4 py-2 bg-black text-white font-medium rounded-md hover:bg-neutral-900"
@@ -263,6 +357,168 @@ export default function ProjectDetail() {
               {showCreateForm ? 'Cancel' : 'New Endpoint'}
             </button>
           </div>
+        </div>
+
+        <div className="bg-white border border-black/10 rounded-lg mb-6">
+          <div className="px-6 py-4 border-b border-black/10">
+            <h2 className="text-xl font-semibold text-gray-900 flex items-center">
+              <UploadCloud className="w-6 h-6 mr-2 text-black" />
+              Import OpenAPI Specification
+            </h2>
+            <p className="mt-1 text-sm text-gray-600">
+              Upload an OpenAPI YAML file to generate endpoints automatically.
+            </p>
+          </div>
+          <form onSubmit={handleUploadSubmit} className="p-6 space-y-4">
+            {uploadError && (
+              <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                <AlertTriangle className="mt-0.5 h-4 w-4" />
+                <span>{uploadError}</span>
+              </div>
+            )}
+
+            <div className="flex flex-col gap-4 md:flex-row md:items-center">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".yaml,.yml"
+                onChange={handleFileChange}
+                className="block w-full text-sm text-gray-600 file:mr-4 file:cursor-pointer file:rounded-md file:border-0 file:bg-black file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-neutral-900"
+              />
+              <button
+                type="submit"
+                disabled={isUploadingOpenAPI || !selectedFile}
+                className="inline-flex items-center justify-center rounded-md bg-black px-5 py-2 text-sm font-medium text-white hover:bg-neutral-900 focus:outline-none focus:ring-2 focus:ring-black focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <UploadCloud className="mr-2 h-4 w-4" />
+                {isUploadingOpenAPI ? 'Uploading...' : 'Upload & Preview'}
+              </button>
+            </div>
+
+            {selectedFile && (
+              <p className="text-sm text-gray-600">
+                Selected file: <span className="font-medium text-gray-800">{selectedFile.name}</span>
+              </p>
+            )}
+
+            {preview && (
+              <div className="space-y-4 rounded-md border border-black/10 bg-gray-50 p-4">
+                <div className="grid gap-4 text-sm text-gray-700 md:grid-cols-3">
+                  <div className="rounded-md border border-black/10 bg-white p-3">
+                    <p className="text-xs uppercase text-gray-500">Total operations</p>
+                    <p className="mt-1 text-xl font-semibold text-gray-900">{preview.total_operations}</p>
+                  </div>
+                  <div className="rounded-md border border-black/10 bg-white p-3">
+                    <p className="text-xs uppercase text-gray-500">New endpoints</p>
+                    <p className="mt-1 text-xl font-semibold text-green-700">{preview.new_count}</p>
+                  </div>
+                  <div className="rounded-md border border-black/10 bg-white p-3">
+                    <p className="text-xs uppercase text-gray-500">Already existing</p>
+                    <p className="mt-1 text-xl font-semibold text-blue-700">{preview.existing_count}</p>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto rounded-md border border-black/5 bg-white">
+                  <table className="min-w-full divide-y divide-gray-200 text-sm">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-2 text-left font-medium text-gray-500">Method</th>
+                        <th className="px-4 py-2 text-left font-medium text-gray-500">Path</th>
+                        <th className="px-4 py-2 text-left font-medium text-gray-500">Status</th>
+                        <th className="px-4 py-2 text-left font-medium text-gray-500">Details</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {preview.operations.map((operation, index) => (
+                        <tr key={`${operation.method}-${operation.path}-${index}`}>
+                          <td className="px-4 py-2">
+                            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${getMethodColor(operation.method)}`}>
+                              {operation.method}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2 font-mono text-sm text-gray-900">{operation.path}</td>
+                          <td className="px-4 py-2">
+                            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${getPreviewStatusStyles(operation.status)}`}>
+                              {getPreviewStatusLabel(operation.status)}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2 text-xs text-gray-600">
+                            {operation.reason || 'Will be created'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="flex flex-col gap-3 border-t border-black/10 pt-4 md:flex-row md:items-center md:justify-between">
+                  <p className="text-sm text-gray-600">
+                    {newOperationsCount > 0
+                      ? `${newOperationsCount} new endpoints ready to be created.`
+                      : 'No new endpoints detected in this upload.'}
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPreview(null);
+                        setSelectedFile(null);
+                        setBulkResult(null);
+                        if (fileInputRef.current) {
+                          fileInputRef.current.value = '';
+                        }
+                      }}
+                      className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-black/5"
+                    >
+                      Clear Preview
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleConfirmImport}
+                      disabled={isBulkCreating || newOperationsCount === 0}
+                      className="inline-flex items-center rounded-md bg-black px-5 py-2 text-sm font-medium text-white hover:bg-neutral-900 focus:outline-none focus:ring-2 focus:ring-black focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <CheckCircle2 className="mr-2 h-4 w-4" />
+                      {isBulkCreating ? 'Creating...' : `Confirm & Create (${newOperationsCount})`}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {bulkResult && (
+              <div className="space-y-3 rounded-md border border-black/10 bg-white p-4">
+                <div className="flex items-start gap-2 text-sm text-green-700">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4" />
+                  <div>
+                    <p className="font-medium text-gray-900">
+                      {bulkResult.created?.length ?? 0} endpoints created successfully.
+                    </p>
+                    <p className="text-gray-600">Your project endpoints have been updated.</p>
+                  </div>
+                </div>
+
+                {bulkResult.skipped && bulkResult.skipped.length > 0 && (
+                  <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                    <div className="flex items-center gap-2 font-medium">
+                      <AlertTriangle className="h-4 w-4" />
+                      {bulkResult.skipped.length} endpoints skipped
+                    </div>
+                    <ul className="mt-2 space-y-1 text-gray-700">
+                      {bulkResult.skipped.slice(0, 5).map((item, index) => (
+                        <li key={`${item.method}-${item.path}-${index}`} className="font-mono">
+                          {item.method} {item.path} – {item.reason}
+                        </li>
+                      ))}
+                      {bulkResult.skipped.length > 5 && (
+                        <li className="text-xs text-gray-500">+{bulkResult.skipped.length - 5} more</li>
+                      )}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+          </form>
         </div>
 
         {showCreateForm && (
@@ -347,9 +603,8 @@ export default function ProjectDetail() {
                   rows={4}
                   value={createFormData.response_headers}
                   onChange={(e) => handleCreateInputChange('response_headers', e.target.value)}
-                  className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-black focus:border-black font-mono text-sm ${
-                    validateJSON(createFormData.response_headers) ? 'border-gray-300' : 'border-red-300'
-                  }`}
+                  className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-black focus:border-black font-mono text-sm ${validateJSON(createFormData.response_headers) ? 'border-gray-300' : 'border-red-300'
+                    }`}
                   placeholder='{"Content-Type": "application/json"}'
                 />
                 {!validateJSON(createFormData.response_headers) && (
@@ -366,9 +621,8 @@ export default function ProjectDetail() {
                   rows={8}
                   value={createFormData.response_body}
                   onChange={(e) => handleCreateInputChange('response_body', e.target.value)}
-                  className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-black focus:border-black font-mono text-sm ${
-                    validateJSON(createFormData.response_body) ? 'border-gray-300' : 'border-red-300'
-                  }`}
+                  className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-black focus:border-black font-mono text-sm ${validateJSON(createFormData.response_body) ? 'border-gray-300' : 'border-red-300'
+                    }`}
                   placeholder='{"message": "Hello World"}'
                 />
                 {!validateJSON(createFormData.response_body) && (
@@ -397,142 +651,7 @@ export default function ProjectDetail() {
           </div>
         )}
 
-        {editingEndpoint && (
-          <div className="bg-white border border-black/10 rounded-lg mb-6">
-            <div className="px-6 py-4 border-b border-black/10">
-              <h2 className="text-xl font-semibold text-gray-900 flex items-center">
-                <Edit className="w-6 h-6 mr-2 text-black" />
-                Edit Endpoint
-              </h2>
-              <p className="mt-1 text-sm text-gray-600">
-                Update the selected endpoint configuration.
-              </p>
-            </div>
 
-            <form onSubmit={handleEditSubmit} className="p-6">
-              {editError && (
-                <div className="mb-4 bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded">
-                  {editError}
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-                <div>
-                  <label htmlFor="edit-method" className="block text-sm font-medium text-gray-700 mb-2">
-                    HTTP Method
-                  </label>
-                  <select
-                    id="edit-method"
-                    value={editFormData.method}
-                    onChange={(e) => handleEditInputChange('method', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-black focus:border-black"
-                  >
-                    <option value="GET">GET</option>
-                    <option value="POST">POST</option>
-                    <option value="PUT">PUT</option>
-                    <option value="DELETE">DELETE</option>
-                    <option value="PATCH">PATCH</option>
-                    <option value="HEAD">HEAD</option>
-                    <option value="OPTIONS">OPTIONS</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label htmlFor="edit-path" className="block text-sm font-medium text-gray-700 mb-2">
-                    Path
-                  </label>
-                  <input
-                    id="edit-path"
-                    type="text"
-                    required
-                    value={editFormData.path}
-                    onChange={(e) => handleEditInputChange('path', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-black focus:border-black"
-                    placeholder="/api/users"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="edit-status" className="block text-sm font-medium text-gray-700 mb-2">
-                    Response Status
-                  </label>
-                  <input
-                    id="edit-status"
-                    type="number"
-                    min="100"
-                    max="599"
-                    required
-                    value={editFormData.response_status}
-                    onChange={(e) => handleEditInputChange('response_status', parseInt(e.target.value))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-black focus:border-black"
-                    placeholder="200"
-                  />
-                </div>
-              </div>
-
-              <div className="mb-6">
-                <label htmlFor="edit-headers" className="block text-sm font-medium text-gray-700 mb-2">
-                  Response Headers (JSON)
-                </label>
-                <textarea
-                  id="edit-headers"
-                  rows={4}
-                  value={editFormData.response_headers}
-                  onChange={(e) => handleEditInputChange('response_headers', e.target.value)}
-                  className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-black focus:border-black font-mono text-sm ${
-                    validateJSON(editFormData.response_headers) ? 'border-gray-300' : 'border-red-300'
-                  }`}
-                  placeholder='{"Content-Type": "application/json"}'
-                />
-                {!validateJSON(editFormData.response_headers) && (
-                  <p className="mt-1 text-sm text-red-600">Invalid JSON format</p>
-                )}
-              </div>
-
-              <div className="mb-6">
-                <label htmlFor="edit-body" className="block text-sm font-medium text-gray-700 mb-2">
-                  Response Body (JSON)
-                </label>
-                <textarea
-                  id="edit-body"
-                  rows={8}
-                  value={editFormData.response_body}
-                  onChange={(e) => handleEditInputChange('response_body', e.target.value)}
-                  className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-black focus:border-black font-mono text-sm ${
-                    validateJSON(editFormData.response_body) ? 'border-gray-300' : 'border-red-300'
-                  }`}
-                  placeholder='{"message": "Hello World"}'
-                />
-                {!validateJSON(editFormData.response_body) && (
-                  <p className="mt-1 text-sm text-red-600">Invalid JSON format</p>
-                )}
-              </div>
-
-              <div className="flex justify-end space-x-3">
-                <button
-                  type="button"
-                  onClick={() => setEditingEndpoint(null)}
-                  className="px-4 py-2 border border-gray-300 text-gray-700 font-medium rounded-md hover:bg-black/5 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={
-                    isUpdating ||
-                    !editFormData.path.trim() ||
-                    !validateJSON(editFormData.response_body) ||
-                    !validateJSON(editFormData.response_headers)
-                  }
-                  className="flex items-center px-6 py-2 bg-black text-white font-medium rounded-md hover:bg-neutral-900 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <Save className="w-4 h-4 mr-2" />
-                  {isUpdating ? 'Saving...' : 'Save Changes'}
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
 
         <div className="bg-white border border-black/10 rounded-lg">
           <div className="px-6 py-4 border-b border-black/10">
@@ -581,7 +700,11 @@ export default function ProjectDetail() {
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
                   {endpoints?.map((endpoint) => (
-                    <tr key={endpoint.uuid} className="hover:bg-black/5">
+                    <tr
+                      key={endpoint.uuid}
+                      className="hover:bg-black/5 cursor-pointer transition-colors"
+                      onClick={() => router.push(`/projects/${projectUuid}/endpoints/${endpoint.uuid}`)}
+                    >
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getMethodColor(endpoint.method)}`}>
                           {endpoint.method}
@@ -600,24 +723,20 @@ export default function ProjectDetail() {
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         {isMounted ? new Date(endpoint.created_at).toLocaleDateString() : ''}
                       </td>
-                       <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                         <div className="flex items-center justify-end space-x-2">
-                           <button
-                             onClick={() => startEditing(endpoint)}
-                             className="text-black hover:text-black/70"
-                             title="Edit"
-                           >
-                             <Edit className="h-4 w-4" />
-                           </button>
-                           <button
-                             onClick={() => deleteEndpoint(endpoint.uuid)}
-                             className="text-black hover:text-black/70"
-                             title="Delete"
-                           >
-                             <Trash2 className="h-4 w-4" />
-                           </button>
-                         </div>
-                       </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        <div className="flex items-center justify-end space-x-2">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteEndpoint(endpoint.uuid);
+                            }}
+                            className="text-black hover:text-black/70"
+                            title="Delete"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

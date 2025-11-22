@@ -2,6 +2,8 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -55,6 +57,92 @@ func (h *EndpointHandler) CreateEndpoint(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{"endpoint": endpoint})
+}
+
+func (h *EndpointHandler) ImportOpenAPIYAML(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	projectUUID := c.Param("project_uuid")
+	if projectUUID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid project UUID"})
+		return
+	}
+
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "File is required"})
+		return
+	}
+
+	file, err := fileHeader.Open()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Unable to open uploaded file"})
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Unable to read uploaded file"})
+		return
+	}
+
+	preview, err := h.service.PreviewOpenAPIYAML(projectUUID, data, userID.(int))
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidOpenAPIDocument):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		case err.Error() == "project not found":
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"preview": preview})
+}
+
+func (h *EndpointHandler) CreateEndpointsBulk(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	projectUUID := c.Param("project_uuid")
+	if projectUUID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid project UUID"})
+		return
+	}
+
+	var req contracts.BulkCreateEndpointsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if len(req.Endpoints) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No endpoints provided"})
+		return
+	}
+
+	result, err := h.service.CreateEndpointsBulk(projectUUID, req.Endpoints, userID.(int))
+	if err != nil {
+		switch err.Error() {
+		case "project not found":
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"result": result})
 }
 
 func (h *EndpointHandler) MockHandler(c *gin.Context) {
@@ -172,4 +260,31 @@ func (h *EndpointHandler) GetEndpoints(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"endpoints": endpoints})
+}
+
+func (h *EndpointHandler) GetEndpoint(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	endpointUUID := c.Param("endpoint_uuid")
+	if endpointUUID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid endpoint UUID"})
+		return
+	}
+
+	endpoint, err := h.service.GetEndpoint(endpointUUID, userID.(int))
+	if err != nil {
+		switch err.Error() {
+		case "endpoint not found", "project not found":
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"endpoint": endpoint})
 }

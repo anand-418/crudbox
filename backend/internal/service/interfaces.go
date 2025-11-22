@@ -30,6 +30,9 @@ type EndpointService interface {
 	UpdateEndpoint(endpointUUID string, req *contracts.UpdateEndpointRequest, userID int) (*contracts.Endpoint, error)
 	DeleteEndpoint(endpointUUID string, userID int) error
 	GetByProjectIDAndPath(projectID int, path, method string) (*contracts.Endpoint, error)
+	PreviewOpenAPIYAML(projectUUID string, data []byte, userID int) (*contracts.OpenAPIImportPreview, error)
+	CreateEndpointsBulk(projectUUID string, requests []contracts.CreateEndpointRequest, userID int) (*contracts.BulkCreateEndpointsResult, error)
+	GetEndpoint(endpointUUID string, userID int) (*contracts.Endpoint, error)
 }
 
 type Services struct {

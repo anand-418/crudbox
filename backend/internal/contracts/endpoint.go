@@ -22,9 +22,9 @@ type Endpoint struct {
 type CreateEndpointRequest struct {
 	Method          string `json:"method" binding:"required"`
 	Path            string `json:"path" binding:"required"`
-	ResponseBody    string `json:"response_body"`
+	ResponseBody    string `json:"response_body" default:"{}"`
 	ResponseStatus  int    `json:"response_status"`
-	ResponseHeaders string `json:"response_headers"`
+	ResponseHeaders string `json:"response_headers" default:"{}"`
 }
 
 type UpdateEndpointRequest struct {

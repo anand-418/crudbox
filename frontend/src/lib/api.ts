@@ -58,6 +58,17 @@ export const projectAPI = {
 
   listProjectEndpoints: (uuid: string) =>
     api.get(`/project/${uuid}/endpoints`),
+
+  uploadOpenAPI: (uuid: string, file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    return api.post(`/project/${uuid}/upload/openapiyml`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+  },
 };
 
 // Endpoint APIs
@@ -73,18 +84,30 @@ export const endpointAPI = {
 
   list: (projectUuid: string) =>
     api.get(`/project/${projectUuid}/endpoints`),
-  
-  delete: (endpointUuid: string) => 
+
+  get: (endpointUuid: string) =>
+    api.get(`/endpoint/${endpointUuid}`),
+
+  delete: (endpointUuid: string) =>
     api.delete(`/endpoint/${endpointUuid}`),
 
-  update: (projectUuid: string, endpointUuid: string, data: {
+  update: (endpointUuid: string, data: {
     method: string;
     path: string;
     response_body: string;
     response_status: number;
     response_headers: string;
   }) =>
-    api.put(`/project/${projectUuid}/endpoint/${endpointUuid}`, data),
+    api.put(`/endpoint/${endpointUuid}`, data),
+
+  bulkCreate: (projectUuid: string, endpoints: {
+    method: string;
+    path: string;
+    response_body: string;
+    response_status: number;
+    response_headers: string;
+  }[]) =>
+    api.post(`/project/${projectUuid}/endpoints/bulk`, { endpoints }),
 };
 
 export default api;
