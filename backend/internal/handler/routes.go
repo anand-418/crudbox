@@ -65,8 +65,11 @@ func (s *Server) SetupRoutes() *gin.Engine {
 		protected.POST("/project", s.projectHandler.CreateProject)
 		protected.GET("/projects", s.projectHandler.GetProjects)
 		protected.DELETE("/project/:project_uuid", s.projectHandler.DeleteProject)
+		protected.POST("/project/:project_uuid/upload/openapiyml", s.endpointHandler.ImportOpenAPIYAML)
+		protected.POST("/project/:project_uuid/endpoints/bulk", s.endpointHandler.CreateEndpointsBulk)
 		protected.POST("/project/:project_uuid/endpoint", s.endpointHandler.CreateEndpoint)
-		protected.PUT("/project/:project_uuid/endpoint/:endpoint_uuid", s.endpointHandler.UpdateEndpoint)
+		protected.GET("/endpoint/:endpoint_uuid", s.endpointHandler.GetEndpoint)
+		protected.PUT("/endpoint/:endpoint_uuid", s.endpointHandler.UpdateEndpoint)
 		protected.GET("/project/:project_uuid/endpoints", s.endpointHandler.GetEndpoints)
 
 		protected.DELETE("/endpoint/:endpoint_uuid", s.endpointHandler.DeleteEndpoint)
